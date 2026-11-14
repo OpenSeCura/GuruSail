@@ -1,0 +1,8 @@
+build/
+sail_smt_cache
+cheriot/NondetStep/Compile.hs
+*.vo
+*.vok
+*.vos
+*.glob
+.*.aux
