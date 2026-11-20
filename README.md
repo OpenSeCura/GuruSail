@@ -218,3 +218,14 @@ that Sail checks the width rather than solving for it.
 - There is no `reset` function: the initial values are in the register declarations.
 - The model is written for Sail's C backend. Its other backends (`-coq`, `-lean`) have not
   been tried.
+
+## Use of AI
+
+AI was used to generate the Sail pretty printer for Guru, written in Haskell, and humans
+reviewed it. The reviewers are not familiar with Sail's syntax, and do not know whether Sail
+has surprising semantics of the kind SystemVerilog has (see
+https://github.com/Cherified/Guru/commit/9a97e5d8624ac65524fc50e61789aeed53572461).
+
+Both `specModInst` of https://github.com/OpenSeCura/cheriot and `simpleSpecModInst` of
+https://github.com/OpenSeCura/SpecCheriot were tested, and their outputs (the UART output and
+the cycle counts) matched those of the Verilator simulators exactly.
