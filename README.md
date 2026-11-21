@@ -47,8 +47,9 @@ build/Test/sail_emu        # run an emulator
 
 Per design the build copies `Compile.hs` to `build/<name>/` (with the same fix-ups as Guru's
 `Main_rule`), compiles the generator `SailGen` from `Sail.hs`, prints `Model.sail`, runs
-`sail -c` on `GuruLibrary.sail` and `Model.sail`, and compiles the result with Sail's C
-runtime and `GuruRuntime.c`.
+`sail -c -O` on `GuruLibrary.sail` and `Model.sail`, and compiles the result with Sail's C
+runtime and `GuruRuntime.c`. `-O` makes the emulator about ten times faster; `make SAIL_FLAGS=`
+drops it.
 
 The emulator runs `step` for 100 cycles, or until the design calls `Finish`. That is the
 number of cycles the Verilog testbench runs after reset. Environment variables:
@@ -118,6 +119,11 @@ shape always gets the same name. `D` is the largest field size and `L` is
 `log2_up (length ls)`. A tagged union is not a Sail `union`, because `ReadUnionData`
 reinterprets the data bits whatever the tag is. A field whose name is a Sail keyword or
 built-in type name gets a `_` suffix (the table is `sailReserved` in `SailPrinter.hs`).
+
+Sail 0.20.3's C backend compiles a read of an element of `vector(n, bits(1))` to
+`bitvector_access`, which does not compile (https://github.com/rems-project/sail/issues/1850).
+So an element of kind `Bit 1` of an array or a memory is stored as a `bool`, converted with
+`guru_bits_to_bool` where it is stored and with `guru_bool_to_bits` where it is read.
 
 Each struct, tagged union and array kind gets `to_bits_<name>` and `from_bits_<name>`
 (arrays are named `A_<i>` for this purpose). The bit layout is that of `evalToBit` and of
@@ -227,5 +233,5 @@ has surprising semantics of the kind SystemVerilog has (see
 https://github.com/Cherified/Guru/commit/9a97e5d8624ac65524fc50e61789aeed53572461).
 
 Both `specModInst` of https://github.com/OpenSeCura/cheriot and `simpleSpecModInst` of
-https://github.com/OpenSeCura/SpecCheriot were tested, and their outputs (the UART output and
-the cycle counts) matched those of the Verilator simulators exactly.
+https://github.com/OpenSeCura/SpecCheriot were tested, and their UART outputs
+matched those of the Verilator simulators exactly.

@@ -20,6 +20,7 @@
 #   make check                    compare emulator output with the Verilator simulators
 #   make GURU_DIR=<path>          Guru checkout to use (default ../Guru)
 #   make IO=<file.c>              harness with its own guru_send and guru_recv (default GuruIo.c)
+#   make SAIL_FLAGS=<flags>       flags of sail -c (default -O)
 
 GURU_DIR ?= ../Guru
 
@@ -29,6 +30,8 @@ include $(GURU_DIR)/Gallina.mk
 DESIGNS ?= $(wildcard $(GURU_DIR)/Example/*/)
 
 SAIL ?= sail
+# -O makes the emulator about ten times faster (see README); make SAIL_FLAGS= to drop it
+SAIL_FLAGS ?= -O
 SAIL_LIB := $(shell $(SAIL) --dir)/lib
 SAIL_RTS := $(addprefix $(SAIL_LIB)/,sail.c rts.c elf.c sail_failure.c sail_config.c cJSON.c)
 GMP_FLAGS := $(shell pkg-config --cflags --libs gmp 2>/dev/null || echo -lgmp)
@@ -72,7 +75,7 @@ build/$(2)/Model.sail: build/$(2)/SailGen
 	build/$(2)/SailGen > $$@
 
 build/$(2)/model.c: build/$(2)/Model.sail GuruLibrary.sail
-	$(SAIL) -c --c-include GuruRuntime.h GuruLibrary.sail build/$(2)/Model.sail -o build/$(2)/model
+	$(SAIL) -c $(SAIL_FLAGS) --c-include GuruRuntime.h GuruLibrary.sail build/$(2)/Model.sail -o build/$(2)/model
 
 build/$(2)/sail_emu: build/$(2)/model.c $(RUNTIME)
 	$$(call gallina_lib,build/$(2)/,build/$(2)/Model.sail)

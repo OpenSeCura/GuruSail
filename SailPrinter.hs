@@ -99,8 +99,25 @@ ty _ Bool = "bool"
 ty _ (Bit n) = "bits(" ++ show n ++ ")"
 ty env k
   | isUnit k = "unit"
-  | Array n k' <- k = "vector(" ++ show n ++ ", " ++ ty env k' ++ ")"
+  | Array n k' <- k = "vector(" ++ show n ++ ", " ++ elemTy env k' ++ ")"
   | otherwise = nameOf env k
+
+-- Elements of arrays and memories. Sail 0.20.3's C backend emits bitvector_access for a read
+-- of an element of vector(n, bits(1)), which does not compile, so elements of kind Bit 1 are
+-- stored as bool: toElem converts a value of the element kind to the stored value, fromElem
+-- converts back.
+isBit1 :: Kind -> Bool
+isBit1 (Bit 1) = True
+isBit1 _ = False
+
+elemTy :: Env -> Kind -> String
+elemTy env k = if isBit1 k then "bool" else ty env k
+
+toElem :: Kind -> String -> String
+toElem k s = if isBit1 k then call "guru_bits_to_bool" [s] else s
+
+fromElem :: Kind -> String -> String
+fromElem k s = if isBit1 k then call "guru_bool_to_bits" [s] else s
 
 call :: String -> [String] -> String
 call f args = f ++ "(" ++ intercalate ", " args ++ ")"
@@ -174,8 +191,8 @@ ppKindDecl env (k, name) =
        Array n k' ->
          let w = kindSize k'
              idxs = reverse [0 .. n - 1]
-         in conv (concatBits [toBits env k' ("x[" ++ show i ++ "]") | i <- idxs])
-                 ("[" ++ intercalate ", " [fromBits env k' (slice "b" (i * w) w) | i <- idxs] ++ "]")
+         in conv (concatBits [toBits env k' (fromElem k' ("x[" ++ show i ++ "]")) | i <- idxs])
+                 ("[" ++ intercalate ", " [toElem k' (fromBits env k' (slice "b" (i * w) w)) | i <- idxs] ++ "]")
        _ -> ""
 
 -- ---------------------------------------------------------------------------------
@@ -193,7 +210,7 @@ ppConst env k v
   | Struct ls <- k =
       structLit (nameOf env k) [(field s, ppConst env fk fv) | ((s, fk), fv) <- zip ls (tupleToList ls v)]
   | Array n k' <- k =
-      "([" ++ intercalate ", " (reverse (map (ppConst env k') (unsafeCoerce v :: [Any]))) ++ "] : " ++ ty env k ++ ")"
+      "([" ++ intercalate ", " (reverse (map (toElem k' . ppConst env k') (unsafeCoerce v :: [Any]))) ++ "] : " ++ ty env k ++ ")"
   | TaggedUnion ls <- k =
       let (d, t) = unsafeCoerce v :: (Integer, Integer)
       in structLit (nameOf env k) [("data", bitLit (unionDataSize ls) d), ("tag", bitLit (unionTagSize ls) t)]
@@ -248,14 +265,14 @@ ppExpr env (Ult _ a b) = call "guru_ult" [ppExpr env a, ppExpr env b]
 ppExpr env (ReadStruct ls e i) = atom env e ++ "." ++ field (fst (genericIndex ls i))
 ppExpr env (ReadArray n _ k e i)
   | n <= 0 = zero env k
-  | otherwise = call "guru_read_array" [ppExpr env e, ppExpr env i, zero env k]
-ppExpr env (ReadArrayConst _ _ e i) = atom env e ++ "[" ++ show i ++ "]"
+  | otherwise = fromElem k (call "guru_read_array" [ppExpr env e, ppExpr env i, toElem k (zero env k)])
+ppExpr env (ReadArrayConst _ k e i) = fromElem k (atom env e ++ "[" ++ show i ++ "]")
 ppExpr env (UpdateStruct ls e p v) =
   "{ " ++ atom env e ++ " with " ++ field (fst (genericIndex ls p)) ++ " = " ++ ppExpr env v ++ " }"
-ppExpr env (UpdateArray n _ e _ p v)
+ppExpr env (UpdateArray n k e _ p v)
   | n <= 0 = ppExpr env e
-  | otherwise = call "guru_update_array" [ppExpr env e, ppExpr env p, ppExpr env v]
-ppExpr env (UpdateArrayConst _ _ e p v) = "[" ++ atom env e ++ " with " ++ show p ++ " = " ++ ppExpr env v ++ "]"
+  | otherwise = call "guru_update_array" [ppExpr env e, ppExpr env p, toElem k (ppExpr env v)]
+ppExpr env (UpdateArrayConst _ k e p v) = "[" ++ atom env e ++ " with " ++ show p ++ " = " ++ toElem k (ppExpr env v) ++ "]"
 ppExpr env (ToBit k e) = toBits env k (ppExpr env e)
 ppExpr env (FromBit k e) = fromBits env k (ppExpr env e)
 ppExpr env (ReadUnionTag ls e i)
@@ -275,7 +292,7 @@ ppExpr env (BuildStruct ls vals)
       [(field s, ppExpr env (unsafeCoerce v :: CExpr)) | ((s, _), v) <- zip ls (tupleToList ls vals)]
 ppExpr env (BuildArray n k vals)
   | n <= 0 = "()"
-  | otherwise = "([" ++ intercalate ", " (reverse (map (ppExpr env) vals)) ++ "] : " ++ ty env (Array n k) ++ ")"
+  | otherwise = "([" ++ intercalate ", " (reverse (map (toElem k . ppExpr env) vals)) ++ "] : " ++ ty env (Array n k) ++ ")"
 
 -- ---------------------------------------------------------------------------------
 -- System calls
@@ -341,13 +358,13 @@ ppCompiled env gw q c = case c of
   CWriteReg reg k val rest -> when (kindSize k > 0) [ppReg reg ++ " = " ++ ex val] ++ next rest
   CReadRqMem mem sz k ports i p rest ->
     when (isMem sz k ports)
-      [ppMem "Rp" mem ++ "[" ++ show p ++ "] = " ++ call "guru_read_array" [ppMem "Ram" mem, ex i, zero env k]]
+      [ppMem "Rp" mem ++ "[" ++ show p ++ "] = " ++ call "guru_read_array" [ppMem "Ram" mem, ex i, toElem k (zero env k)]]
     ++ next rest
   CReadRpMem mem sz k ports p tmp rest ->
-    when (isMem sz k ports) [ppTmp tmp ++ " = " ++ ppMem "Rp" mem ++ "[" ++ show p ++ "]"] ++ next rest
+    when (isMem sz k ports) [ppTmp tmp ++ " = " ++ fromElem k (ppMem "Rp" mem ++ "[" ++ show p ++ "]")] ++ next rest
   CWriteMem mem sz k ports i val rest ->
     when (isMem sz k ports)
-      ["{ let idx = unsigned(" ++ ex i ++ "); if idx < " ++ show sz ++ " then " ++ ppMem "Ram" mem ++ "[idx] = " ++ ex val ++ " }"]
+      ["{ let idx = unsigned(" ++ ex i ++ "); if idx < " ++ show sz ++ " then " ++ ppMem "Ram" mem ++ "[idx] = " ++ toElem k (ex val) ++ " }"]
     ++ next rest
   CSend meth _ e rest -> stmt q (call (ppMeth "Send" meth) [ex e]) ++ next rest
   CRecv meth k tmp rest -> when (kindSize k > 0) [ppTmp tmp ++ " = " ++ call (ppMeth "Recv" meth) []] ++ next rest
@@ -449,9 +466,9 @@ ppElemDecl env (i, (s, EReg (Build_Reg k initVal))) =
 ppElemDecl env (i, (s, EMem (Build_Mem n k p initVal))) =
   let ramInit = case initVal of
         Just (Just val) -> ppConst env (Array n k) val
-        _ -> call "vector_init" [zero env k]
+        _ -> call "vector_init" [toElem k (zero env k)]
   in "register " ++ ppMem "Ram" (s, i) ++ " : " ++ ty env (Array n k) ++ " = " ++ ramInit ++ "\n"
-     ++ "register " ++ ppMem "Rp" (s, i) ++ " : " ++ ty env (Array p k) ++ " = " ++ call "vector_init" [zero env k] ++ "\n"
+     ++ "register " ++ ppMem "Rp" (s, i) ++ " : " ++ ty env (Array p k) ++ " = " ++ call "vector_init" [toElem k (zero env k)] ++ "\n"
 ppElemDecl _ _ = ""
 
 -- One function per method, over the generic guru_send / guru_recv of the runtime
